@@ -4,11 +4,13 @@ Self-hosted RSS newsfeed stack with push notifications and a native iOS reader.
 
 | Component | Role |
 |---|---|
-| **Miniflux** | Feed aggregator, web UI, REST API |
-| **PostgreSQL** | Miniflux database |
+| **FreshRSS** | Feed aggregator, web UI, Google Reader API |
+| **PostgreSQL** | FreshRSS database |
 | **ntfy** | Push notifications to iOS |
-| **Reeder 5** (iOS) | Native feed reader via Miniflux API |
+| **Reeder Classic** (iOS) | Native feed reader via Google Reader API |
 | **nginx Proxy Manager** | HTTPS termination (running separately) |
+
+Feed list: see [feeds.md](feeds.md)
 
 ---
 
@@ -17,7 +19,7 @@ Self-hosted RSS newsfeed stack with push notifications and a native iOS reader.
 - Docker + Docker Compose installed on the server
 - nginx Proxy Manager already running (with a Docker network you can attach to)
 - Two DNS records pointing at your server:
-  - `miniflux.yourdomain.com`
+  - `freshrss.yourdomain.com`
   - `ntfy.yourdomain.com`
 
 ---
@@ -25,7 +27,7 @@ Self-hosted RSS newsfeed stack with push notifications and a native iOS reader.
 ## 1. Clone the repo
 
 ```bash
-git clone <repo-url> newsfeed
+git clone git@github.com:Sprayer115/personalized-newsfeed.git newsfeed
 cd newsfeed
 ```
 
@@ -40,9 +42,8 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-MINIFLUX_DB_PASSWORD=<strong unique password>
-MINIFLUX_ADMIN_PASSWORD=<strong unique password>
-MINIFLUX_BASE_URL=https://miniflux.yourdomain.com
+FRESHRSS_DB_PASSWORD=<strong unique password>
+TZ=Europe/Berlin
 ```
 
 ---
@@ -55,13 +56,11 @@ Edit `ntfy/server.yml` and set your domain:
 base-url: https://ntfy.yourdomain.com
 ```
 
-The other values (`cache-file`, `auth-file`, `auth-default-access`) should stay as-is.
-
 ---
 
 ## 4. Connect to nginx Proxy Manager's Docker network
 
-NPM needs to reach the `miniflux` and `ntfy` containers. Either:
+NPM needs to reach the `freshrss` and `ntfy` containers. Either:
 
 **Option A — attach this stack to NPM's existing network:**
 
@@ -70,7 +69,7 @@ Find your NPM network name:
 docker network ls
 ```
 
-Add it as an external network in `docker-compose.yml` under the `ntfy` and `miniflux` services, and declare it at the bottom:
+Add it as an external network to both the `freshrss` and `ntfy` services and declare it at the bottom of `docker-compose.yml`:
 
 ```yaml
 networks:
@@ -80,11 +79,9 @@ networks:
     external: true
 ```
 
-Then add `npm_network` to both `miniflux` and `ntfy` service network lists.
+Then add `npm_network` to both service network lists.
 
-**Option B — forward by host IP:**
-
-In NPM, use the server's host IP and the internal ports (`8080` for Miniflux, `80` for ntfy) instead of container names.
+**Option B — forward by host IP in NPM**, using the server's host IP and internal ports (`80` for both FreshRSS and ntfy).
 
 ---
 
@@ -92,10 +89,6 @@ In NPM, use the server's host IP and the internal ports (`8080` for Miniflux, `8
 
 ```bash
 docker compose up -d
-```
-
-Verify all three containers are running:
-```bash
 docker compose ps
 ```
 
@@ -107,88 +100,67 @@ In the NPM web UI, create two **Proxy Hosts**:
 
 | Domain | Forward Hostname | Forward Port | SSL |
 |---|---|---|---|
-| `miniflux.yourdomain.com` | `miniflux` | `8080` | Let's Encrypt |
+| `freshrss.yourdomain.com` | `freshrss` | `80` | Let's Encrypt |
 | `ntfy.yourdomain.com` | `ntfy` | `80` | Let's Encrypt |
 
-Enable "Force SSL" on both. Wait for Let's Encrypt certificates to issue.
+Enable "Force SSL" on both.
 
 ---
 
-## 7. Verify Miniflux
+## 7. FreshRSS initial setup
 
-Open `https://miniflux.yourdomain.com` — log in with `admin` and the password from `.env`.
+Open `https://freshrss.yourdomain.com` and complete the web installer:
+
+- **Database:** PostgreSQL
+  - Host: `freshrss-db`
+  - Port: `5432`
+  - Database: `freshrss`
+  - User: `freshrss`
+  - Password: value from `.env`
+- Create your admin account
+- Enable the **API** under Settings → Authentication → Allow API access (required for Reeder Classic)
 
 ---
 
-## 8. Create ntfy tokens
+## 8. Add feeds
+
+Go to **Subscription Management → Add a feed** and paste URLs from [feeds.md](feeds.md).
+
+---
+
+## 9. Set up ntfy tokens
 
 ```bash
-# Token for Miniflux to publish notifications
-docker compose exec ntfy ntfy token add miniflux-publisher
+# Token for a notifier script/extension to publish
+docker compose exec ntfy ntfy token add newsfeed-publisher
 
 # Token for your iOS device to subscribe
 docker compose exec ntfy ntfy token add ios-reader
 ```
 
-Save both tokens — you'll need them in the next steps.
+> **Note:** FreshRSS has no native ntfy integration. Options:
+> - Install the community extension [freshrss-notify](https://github.com/vert-fr/FreshRSS-Notify-Ext) via the extensions volume
+> - Or use a lightweight cron/webhook sidecar that polls the FreshRSS API and sends to ntfy
 
 ---
 
-## 9. Configure Miniflux → ntfy integration
+## 10. Connect Reeder Classic (iOS)
 
-In Miniflux: **Settings → Integrations → ntfy**
+1. Open Reeder Classic → **+** → **Self-Hosted → FreshRSS**
+2. URL: `https://freshrss.yourdomain.com`
+3. Username + password: your FreshRSS admin credentials
 
-| Field | Value |
-|---|---|
-| ntfy URL | `https://ntfy.yourdomain.com` |
-| Topic | `newsfeed` |
-| Token | `miniflux-publisher` token from step 8 |
-
-Enable the integration and save.
+Reeder connects via the Google Reader compatible API at `/api/greader.php`.
 
 ---
 
-## 10. Add feeds
-
-In Miniflux: **Feeds → Add Feed**
-
-**Reddit (no credentials needed):**
-```
-https://www.reddit.com/r/SUBREDDIT/.rss
-```
-
-For full article text: open the feed settings → enable **"Fetch original content"**.
-
----
-
-## 11. Set up Reeder 5 (iOS)
-
-1. Install **Reeder 5** from the App Store
-2. Open → **Accounts → +**  → **Miniflux**
-3. Server URL: `https://miniflux.yourdomain.com`
-4. API Key: generate one in Miniflux → **Settings → API Keys**
-
----
-
-## 12. Set up ntfy iOS app
+## 11. Set up ntfy iOS app
 
 1. Install **ntfy** from the App Store
 2. Add server: `https://ntfy.yourdomain.com`
 3. Subscribe to topic: `newsfeed`
-4. When prompted for a token, use the `ios-reader` token from step 8
+4. Use the `ios-reader` token when prompted
 5. Enable notifications for the topic
-
----
-
-## Security checklist
-
-- [ ] `MINIFLUX_DB_PASSWORD` — strong, unique (not shared with admin password)
-- [ ] `MINIFLUX_ADMIN_PASSWORD` — strong, unique
-- [ ] ntfy `auth-default-access: deny-all` is set in `ntfy/server.yml`
-- [ ] NPM SSL certs issued for both domains
-- [ ] No ports (`8080`, `5432`, `80`) exposed directly to the internet
-- [ ] Reeder 5 uses API key, not the admin password
-- [ ] `.env` is in `.gitignore` and never committed
 
 ---
 
@@ -198,3 +170,14 @@ For full article text: open the feed settings → enable **"Fetch original conte
 docker compose pull
 docker compose up -d
 ```
+
+---
+
+## Security checklist
+
+- [ ] `FRESHRSS_DB_PASSWORD` — strong, unique
+- [ ] FreshRSS admin password — strong, unique
+- [ ] ntfy `auth-default-access: deny-all` set in `ntfy/server.yml`
+- [ ] NPM SSL certs issued for both domains
+- [ ] No ports exposed directly to the internet
+- [ ] `.env` is never committed

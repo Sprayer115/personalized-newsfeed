@@ -10,11 +10,11 @@ A self-hosted personalized newsfeed stack. No application code — infrastructur
 
 | Service | Image | Role |
 |---|---|---|
-| Miniflux | `miniflux/miniflux:latest` | RSS/Atom aggregator, web UI, API backend |
-| PostgreSQL | `postgres:15-alpine` | Miniflux database (SQLite not supported by Miniflux) |
+| FreshRSS | `freshrss/freshrss:latest` | RSS/Atom aggregator, web UI, Google Reader API backend |
+| PostgreSQL | `postgres:15-alpine` | FreshRSS database |
 | ntfy | `binwiederhier/ntfy:latest` | Push notification broker |
 
-SSL termination and public exposure are handled by **nginx Proxy Manager** (running separately, not in this compose file). Neither Miniflux nor ntfy publish ports directly.
+SSL termination and public exposure are handled by **nginx Proxy Manager** (running separately, not in this compose file). Neither FreshRSS nor ntfy publish ports directly.
 
 ## Repository layout
 
@@ -22,42 +22,34 @@ SSL termination and public exposure are handled by **nginx Proxy Manager** (runn
 docker-compose.yml   — all three services, volumes, network
 ntfy/server.yml      — ntfy server config (bind-mounted into container at /etc/ntfy)
 .env.example         — required environment variable template
+feeds.md             — all RSS feed URLs organized by category
 ```
 
 ## Deploying
 
 ```bash
 cp .env.example .env
-# Fill in MINIFLUX_DB_PASSWORD, MINIFLUX_ADMIN_PASSWORD, MINIFLUX_BASE_URL
+# Fill in FRESHRSS_DB_PASSWORD and TZ
 docker compose up -d
 ```
 
-## Post-deploy configuration (manual, via web UIs)
+FreshRSS database connection is configured through the **web installer UI** (not env vars) — host `freshrss-db`, port `5432`, db/user `freshrss`.
 
-**Miniflux** (`https://miniflux.yourdomain.com`):
-- Settings → Integrations → ntfy: URL `https://ntfy.yourdomain.com`, topic `newsfeed`, publish token
-- Settings → API Keys: generate a key for Reeder 5
-- Feeds: add Reddit sources as `https://www.reddit.com/r/SUBREDDIT/.rss` — no credentials needed
-- Per-feed: enable "Fetch original content" for full-text extraction via built-in scraper
+## iOS client
 
-**ntfy** (CLI, after container starts):
-```bash
-# Create publish-only token for Miniflux
-docker exec -it <ntfy-container> ntfy token add --role=write miniflux-publisher
-# Create read token for iOS app
-docker exec -it <ntfy-container> ntfy token add --role=read ios-reader
-```
+**Reeder Classic** connects via the Google Reader compatible API:
+- URL: `https://freshrss.yourdomain.com`
+- Auth: FreshRSS username + password
+- API must be enabled in FreshRSS Settings → Authentication → Allow API access
 
-**nginx Proxy Manager** (web UI):
-- Proxy host: `miniflux.yourdomain.com` → `miniflux:8080`, Let's Encrypt SSL
-- Proxy host: `ntfy.yourdomain.com` → `ntfy:80`, Let's Encrypt SSL
-- NPM must be on the same Docker network as the `newsfeed` network, or use the host IP
+## Push notifications
 
-**Reeder 5** (iOS): Accounts → Add → Miniflux → server URL + API key (not username/password)
+FreshRSS has **no native ntfy integration**. Options:
+- Community extension: [freshrss-notify](https://github.com/vert-fr/FreshRSS-Notify-Ext) (mount into `freshrss-extensions` volume)
+- Custom cron/webhook sidecar (not in v1)
 
-## Key constraints (from the spec)
+## Key constraints
 
-- ntfy is a **temporary notification bridge**. The Miniflux REST API at `/v1` is the integration point for the future custom iOS app.
-- Single ntfy topic `newsfeed` — no per-source topic splitting in v1.
 - ntfy `auth-default-access: deny-all` must remain in `ntfy/server.yml` — server is public-facing.
-- Do not add application code, custom webhooks, or extraction services — the spec explicitly excludes them from v1.
+- Do not add application code or extraction services in v1.
+- Feed URLs are documented in `feeds.md` — update there when adding new sources.
