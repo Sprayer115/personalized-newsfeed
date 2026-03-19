@@ -1,0 +1,4 @@
+base-url: https://ntfy.yourdomain.com
+cache-file: /var/lib/ntfy/cache.db
+auth-file: /var/lib/ntfy/auth.db
+auth-default-access: deny-all

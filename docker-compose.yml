@@ -1,0 +1,53 @@
+services:
+  miniflux-db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: miniflux
+      POSTGRES_USER: miniflux
+      POSTGRES_PASSWORD: ${MINIFLUX_DB_PASSWORD}
+    volumes:
+      - miniflux-db-data:/var/lib/postgresql/data
+    networks:
+      - newsfeed
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "miniflux"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  miniflux:
+    image: miniflux/miniflux:latest
+    restart: unless-stopped
+    depends_on:
+      miniflux-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://miniflux:${MINIFLUX_DB_PASSWORD}@miniflux-db/miniflux?sslmode=disable
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD}
+      BASE_URL: ${MINIFLUX_BASE_URL}
+    networks:
+      - newsfeed
+    # Port 8080 is NOT published — traffic arrives via nginx Proxy Manager only
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ntfy-data:/var/lib/ntfy
+      - ./ntfy:/etc/ntfy
+    networks:
+      - newsfeed
+    # Port 80 is NOT published — traffic arrives via nginx Proxy Manager only
+
+volumes:
+  miniflux-db-data:
+  ntfy-data:
+
+networks:
+  newsfeed:
+    driver: bridge
